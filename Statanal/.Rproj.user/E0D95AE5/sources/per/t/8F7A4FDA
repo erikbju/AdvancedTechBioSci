@@ -1,0 +1,28 @@
+{
+    "id": "8F7A4FDA",
+    "path": null,
+    "project_path": null,
+    "type": "object_explorer",
+    "hash": "0",
+    "contents": "",
+    "dirty": false,
+    "created": 1770047775012.0,
+    "source_on_save": false,
+    "relative_order": 5,
+    "properties": {
+        "id": "22663eba1da7487882260f605fd18150",
+        "name": "merged_no_qc@assays",
+        "title": "merged_no_qc@assays",
+        "language": "R",
+        "source_window_id": "",
+        "Source": "Source"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 0,
+    "encoding": "",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1770047775012,
+    "read_only": false,
+    "read_only_alternatives": []
+}

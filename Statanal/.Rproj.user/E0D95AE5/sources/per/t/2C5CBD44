@@ -1,0 +1,28 @@
+{
+    "id": "2C5CBD44",
+    "path": null,
+    "project_path": null,
+    "type": "object_explorer",
+    "hash": "0",
+    "contents": "",
+    "dirty": false,
+    "created": 1770048219485.0,
+    "source_on_save": false,
+    "relative_order": 5,
+    "properties": {
+        "id": "44c88be6eebb4375b6193c625dc00666",
+        "name": "modes",
+        "title": "modes",
+        "language": "R",
+        "source_window_id": "",
+        "Source": "Source"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 0,
+    "encoding": "",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1770048219485,
+    "read_only": false,
+    "read_only_alternatives": []
+}

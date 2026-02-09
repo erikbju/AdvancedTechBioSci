@@ -1,0 +1,28 @@
+{
+    "id": "52894F00",
+    "path": null,
+    "project_path": null,
+    "type": "object_explorer",
+    "hash": "0",
+    "contents": "",
+    "dirty": false,
+    "created": 1770047765861.0,
+    "source_on_save": false,
+    "relative_order": 4,
+    "properties": {
+        "id": "99c32c985a8b4b62970c255ff4f780ea",
+        "name": "merged_no_qc",
+        "title": "merged_no_qc",
+        "language": "R",
+        "source_window_id": "",
+        "Source": "Source"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 0,
+    "encoding": "",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1770047765861,
+    "read_only": false,
+    "read_only_alternatives": []
+}

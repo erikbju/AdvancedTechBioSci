@@ -1,0 +1,28 @@
+{
+    "id": "F2D88E60",
+    "path": null,
+    "project_path": null,
+    "type": "object_explorer",
+    "hash": "0",
+    "contents": "",
+    "dirty": false,
+    "created": 1770107719385.0,
+    "source_on_save": false,
+    "relative_order": 10,
+    "properties": {
+        "id": "e8be9a9a4f184b12ae5b4748abed8549",
+        "name": "base@colData@listData",
+        "title": "base@colData@listData",
+        "language": "R",
+        "source_window_id": "",
+        "Source": "Source"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 0,
+    "encoding": "",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1770107719385,
+    "read_only": false,
+    "read_only_alternatives": []
+}

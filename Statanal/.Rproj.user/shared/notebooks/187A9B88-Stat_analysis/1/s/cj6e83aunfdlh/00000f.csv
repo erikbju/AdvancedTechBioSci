@@ -1,0 +1,3 @@
+"0","COMB <- import_from_excel(file = ""./input/comb_data.xlsx"", sheet = 1,"
+"0","                        corner_row = 5, corner_column = 6,"
+"0","                        split_by = c(""Column"", ""Ion Mode""))"

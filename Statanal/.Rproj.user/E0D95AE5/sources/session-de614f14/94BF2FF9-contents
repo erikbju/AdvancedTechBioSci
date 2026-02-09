@@ -1,0 +1,438 @@
+---
+title: "YGR067C"
+author: "Erik Bjurström"
+date: "2023-03-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries}
+#Loads all the libraries needed for analysis
+library(DESeq2,warn.conflicts = F)
+library(tidyverse,warn.conflicts = F)
+library(tximport,warn.conflicts = F)
+library(org.Sc.sgd.db)
+library(piano,warn.conflicts = F)
+library(ashr)
+library(exact2x2)
+library(ggplot2)
+library(gridExtra)
+library(pathfindR)
+library(xlsx)
+```
+
+```{r}
+# Imports all the R functions in this Rmd from subdir "R_scripts"
+file.sources = list.files("../R_scripts",pattern = "*.R",full.names = T)
+sapply(file.sources, source, .GlobalEnv)
+```
+
+```{r}
+# # Generates extensive conversion table between gene stable ID and gene name
+# tx2gene <- read.delim("./data/db/salmon_tx2gene.tsv", sep = "\t", quote = "")
+# 
+# gene2desc <- org.Sc.sgdDESCRIPTION
+# mapped_probes <- mappedkeys(gene2desc)
+# gene2desc <- as.data.frame(gene2desc[mapped_probes])
+# 
+# tx2gene_adj <- tx2gene %>% subset(ensgene %in% gene2desc$systematic_name)
+# saveRDS(tx2gene_adj, file = "./data/db/tx2gene_adj.rds")
+# 
+# gene_description <- merge(tx2gene_adj, gene2desc, by.x = "ensgene", by.y = "systematic_name") %>% dplyr::select(-tx_id) %>% dplyr::rename("Gene_stable_ID" = ensgene, "Gene_name" = symbol, "Description" = feature_description )
+# saveRDS(gene_description, file = "./data/db/gene_description.rds")
+
+tx2gene_adj <- readRDS("./data/db/tx2gene_adj.rds")
+gene_description <- readRDS("./data/db/gene_description.rds")
+```
+
+```{r Extract count data}
+# Finds all folders in /data that ends with "salmon", i.e. the folders with the
+# quant.sf files which contains counts mapped to genes.
+samples <- list.files(path = "./data/EXP/", full.names = T, pattern = "[0-9]$")
+files <- file.path(samples, "quant.sf")
+
+# Names each entry in "files" to the sample name
+# e.g. ./data/T1_post.salmon/quant.sf -> T1_post
+names(files) <- str_replace(samples, "./data/EXP//","")
+
+# Imports count data from each quant.sf and names each gene using 
+# "salmon_tx2gene.tsv"
+txi <- tximport(files, type="salmon", 
+                tx2gene = tx2gene[,c("tx_id", "ensgene", "symbol")], 
+                countsFromAbundance = "lengthScaledTPM",
+                importer = read.delim)
+# 
+# Rounds counts to integers 
+data <- txi$counts %>% 
+  round() %>% 
+  data.frame()
+```
+
+```{r Loads meta data}
+# Load sample info, used when contrasting samples using DESeq2
+meta <- read.csv("./data//EXP/Sample_info.csv", sep = ",", quote ="", 
+                 row.names = colnames(txi$counts)) %>% 
+                      dplyr::select(c("Strain", "Phase","Minimum_pool"))
+
+```
+
+```{r Outlier removal}
+outliers = c("GMN-WT1", "GMN-WT2", "GMN-WT3", "GMN-MUT3", "G-WT5")
+files_clean <- files[!(names(files) %in% outliers)]
+
+txi_clean <- tximport(files_clean, type="salmon", 
+                tx2gene = tx2gene[,c("tx_id", "ensgene", "symbol")], 
+                countsFromAbundance = "lengthScaledTPM")
+
+meta_clean <- meta[!(rownames(meta) %in% outliers),]
+
+
+all(colnames(txi_clean$counts) %in% rownames(meta_clean))
+all(colnames(txi_clean$counts) == rownames(meta_clean))
+```
+
+```{r DDS}
+# Create DESeq2Dataset object
+dds <- DESeqDataSetFromTximport(txi_clean, colData = meta_clean, design = ~Strain + Phase + Strain:Phase)
+dds$group <- factor(paste0(dds$Strain, dds$Phase))
+design(dds) <- ~group
+dds <- estimateSizeFactors(dds)
+
+# Uses Median of Ratios method
+normalized_counts <- counts(dds, normalized = TRUE)
+raw_counts <- counts(dds, normalized = F)
+```
+
+```{r}
+normalized_counts_tb <- normalized_counts %>%
+  data.frame() %>%
+  rownames_to_column(var="Gene_stable_ID") %>% 
+  as_tibble()
+
+# Adds gene name and description to the normalized counts
+normalized_counts_nice <- nicefy_gene_results(normalized_counts_tb, gene_description)
+```
+
+```{r}
+raw_counts_tb <- raw_counts %>% 
+  data.frame() %>% 
+  rownames_to_column(var = "Gene_stable_ID") %>% 
+  as_tibble()
+
+raw_counts_nice <- nicefy_gene_results(raw_counts_tb, gene_description)
+```
+
+
+```{r}
+# Runs DESeq2 on the dds object
+dds <- DESeq(dds)
+```
+
+```{r}
+# Plot of Dispersion estimates.
+# Good data should see a smooth decrease of dispersion as mean of norm counts
+# increases.
+plotDispEsts(dds)
+```
+
+```{r}
+# Performs lfc-shrinkage on the result tables using ashr
+res_table_glucose <- lfcShrink(dds, 
+                               contrast = c("group", "MutantGlucose", 
+                                            "WildtypeGlucose"), type ="ashr")
+res_table_ethanol <- lfcShrink(dds,
+                               contrast = c("group", "MutantEthanol",
+                                            "WildtypeEthanol"), type ="ashr")
+
+res_table_WT <- lfcShrink(dds,
+                          contrast = c("group", "WildtypeEthanol",
+                                       "WildtypeGlucose"), type ="ashr")
+res_table_MUT <- lfcShrink(dds,
+                           contrast = c("group", "MutantEthanol",
+                                        "MutantGlucose"), type ="ashr")
+
+# Prints the summary of the results tables
+summary(res_table_glucose, alpha = 0.05)
+summary(res_table_ethanol, alpha = 0.05)
+summary(res_table_WT, alpha = 0.05)
+summary(res_table_MUT, alpha = 0.05)
+
+```
+
+```{r}
+# Makes a tibble of only significant genes (padj < padj.cutoff)
+padj.cutoff <- 0.05
+
+res_table_glucose_tb <- res_table_glucose %>%
+  data.frame() %>%
+  rownames_to_column(var="Gene_stable_ID") %>% 
+  as_tibble()
+
+sig_glucose <- res_table_glucose_tb %>% 
+  filter(padj < padj.cutoff)
+
+# # Makes a tibble of only significant genes, WTvsMUT1 during ethanol
+res_table_ethanol_tb <- res_table_ethanol %>%
+  data.frame() %>%
+  rownames_to_column(var="Gene_stable_ID") %>%
+  as_tibble()
+
+sig_ethanol <- res_table_ethanol_tb %>%
+  filter(padj < padj.cutoff)
+
+# Makes a tibble of significant genes glucuse vs ethanol in WT
+res_table_WT_tb <- res_table_WT %>%
+  data.frame() %>%
+  rownames_to_column(var="Gene_stable_ID") %>%
+  as_tibble()
+
+sig_WT <- res_table_WT_tb %>%
+  filter(padj < padj.cutoff)
+
+# Makes a tibble of siginifcant genes glucose vs ethanol for MUT
+res_table_MUT_tb <- res_table_MUT %>%
+  data.frame() %>%
+  rownames_to_column(var="Gene_stable_ID") %>%
+  as_tibble()
+
+sig_MUT <- res_table_MUT_tb %>%
+  filter(padj < padj.cutoff)
+```
+
+```{r}
+# Runs a function to add the gene names and description to the tibble
+# with significant genes.
+sig_glucose_nice <- nicefy_gene_results(sig_glucose, gene_description)
+sig_ethanol_nice <- nicefy_gene_results(sig_ethanol, gene_description)
+sig_WT_nice <- nicefy_gene_results(sig_WT, gene_description)
+sig_MUT_nice <- nicefy_gene_results(sig_MUT, gene_description)
+```
+
+```{r}
+pathways <- c("sce00020", "sce00190", "sce00630") # TCA, oxidative phosphorylation, and glyoxylate metabolism
+
+files <- paste0("data/db/KGMLs/", pathways, ".xml")
+```
+
+```{r}
+ntest <- list()
+for (i in pathways) {
+  tmp <- read_xml( paste0("data/db/KGMLs/", i, ".xml"))
+  tmp2 <- xml_find_all(tmp, ".//entry")
+  gens <- xml_attr(tmp2, "name") %>% subset(xml_attr(tmp2, "type") == "gene")
+  gens <- gsub("sce:", "", gens) %>% strsplit(" ") %>% unlist() %>% unique()
+  
+  cpds <- xml_attr(tmp2, "name") %>% subset(xml_attr(tmp2, "type") == "compound")
+  cpds <- gsub("cpd:", "", cpds) %>% strsplit(" ") %>% unlist() %>% unique()
+  ntest[[i]] <- list(genes = gens, compounds = cpds)
+}
+```
+
+```{r}
+# Custom lists
+gluconeogenesis <- list()
+gluconeogenesis$genes <- c("YBR218C", "YGL062W", "YKL029C", "YKR097W", "YLR377C", "YOL126C")
+gluconeogenesis$compounds <- c()
+
+ferment <- list()
+ferment$genes <- c("YDL080C", "YGR087C", "YLR044C", "YLR134W", "YBR145W", "YDL168W", "YGL256W", "YMR083W", "YOL086C","YCR105W", "YMR318C")
+ferment$compounds <- c("C00084", "C00469")
+
+resp <- list()
+resp$genes <- c("YBR221C", "YER178W", "YFL018C", "YGR193C", "YNL071W", "YGL080W", "YGR243W", "YHR162W")
+resp$compounds <- c("C00024")
+
+
+
+ntest[["gluconeogenesis"]] <- gluconeogenesis
+ntest[["glycolysis_ferment"]] <- ferment
+ntest[["glycolysis_respiration"]] <- resp
+
+```
+
+```{r}
+GS_ntest <- data.frame(tx_id = c(ntest$sce00020$genes, 
+                                 ntest$sce00190$genes, 
+                                 ntest$sce00630$genes, 
+                                 ntest$gluconeogenesis$genes,
+                                 ntest$glycolysis_ferment$genes, 
+                                 ntest$glycolysis_respiration$genes),
+                       GSname = c(rep("TCA_cycle", length(ntest$sce00020$genes)),
+                                  rep("Oxidative_phosphorylation", length(ntest$sce00190$genes)),
+                                  rep("Glyoxylate_shunt", length(ntest$sce00630$genes)),
+                                  rep("Gluconeogenesis", length(ntest$gluconeogenesis$genes)),
+                                  rep("Glycolysis_fermentation", length(ntest$glycolysis_ferment$genes)),
+                                  rep("Glycolysis_respiration", length(ntest$glycolysis_respiration$genes))))
+
+GS_ntest <- GS_ntest %>% loadGSC(.)
+```
+
+```{r}
+gluc_nice <- nicefy_gene_results(res_table_glucose_tb, gene_description)
+etoh_nice <- nicefy_gene_results(res_table_ethanol_tb, gene_description)
+```
+
+```{r}
+mylist <- list(gluc_nice, etoh_nice)
+naive_test <- megatest(mylist, GS_ntest)
+```
+
+```{r}
+hypothesis_gluc <- list()
+hypothesis_etoh <- list()
+
+for (i in seq(length(ntest))) {
+  hypothesis_gluc[[names(naive_test)[i]]] <- gluc_nice %>% subset(Gene_stable_ID %in% ntest[[i]]$genes) %>% dplyr::select(Gene_stable_ID, Gene_name, log2FoldChange, padj) 
+}
+
+for (i in seq(length(ntest))) {
+  hypothesis_etoh[[names(naive_test)[i]]] <- etoh_nice %>% subset(Gene_stable_ID %in% ntest[[i]]$genes) %>% dplyr::select(Gene_stable_ID, Gene_name, log2FoldChange, padj)
+}
+```
+
+```{r, echo=F}
+# Plots the results table in a custom volcano plot.
+glucvolc <- volcano_RNA(res_table_glucose_tb %>% subset(!(Gene_stable_ID == "YGR067C")), qval = T)
+
+etohvolc <- volcano_RNA(res_table_ethanol_tb  %>% subset(!(Gene_stable_ID == "YGR067C")), qval = T)
+
+pvolcrna <- do.call(grid.arrange, c(list(glucvolc, etohvolc), nrow = 2))
+```
+
+```{r}
+# path_to_pin_file <- get_pin_file(org = "Saccharomyces_cerevisiae_S288c", path2pin = "./data/db/KGMLs/PINFILE")
+path_to_pin_file <- file.path("./data/db/KGMLs/PINFILE")
+# gsets_list <- get_gene_sets_list(org_code = "sce")
+```
+
+```{r}
+sce_kegg_description <- readRDS('./data/db/sce_kegg_description.RDS')
+sce_kegg_genes <- readRDS('./data/db/sce_kegg_genes.RDS')
+sce_kegg_genes_alt <- readRDS('./data/db/sce_kegg_genes_alt.RDS')
+```
+
+```{r}
+gluc_nice2 <- gluc_nice
+gluc_nice2$genelabel <- if_else(gluc_nice2$Gene_name == "" | is.na(gluc_nice2$Gene_name),
+                              gluc_nice2$Gene_stable_ID,gluc_nice2$Gene_name)
+gluc_input <- data.frame(Gene.symbol = gluc_nice2$genelabel, logFC <-as.numeric( res_table_glucose_tb$log2FoldChange), pval <- as.numeric(res_table_glucose_tb$padj)) %>% na.omit()
+colnames(gluc_input) <- c("Gene.symbol", "logFC", "pval")
+```
+
+```{r}
+etoh_nice2 <- etoh_nice
+etoh_nice2$genelabel <- if_else(etoh_nice2$Gene_name == "" | is.na(etoh_nice2$Gene_name),
+                              etoh_nice2$Gene_stable_ID,etoh_nice2$Gene_name)
+etoh_input <- data.frame(Gene.symbol = etoh_nice2$genelabel, logFC <-as.numeric( res_table_ethanol_tb$log2FoldChange), pval <- as.numeric(res_table_ethanol_tb$padj)) %>% na.omit()
+colnames(etoh_input) <- c("Gene.symbol", "logFC", "pval")
+```
+
+```{r}
+set.seed(3151)
+output_df_gluc <-run_pathfindR(input = gluc_input,
+                          convert2alias = F,
+                          gene_sets = "Custom",
+                          custom_genes = sce_kegg_genes_alt,
+                          custom_descriptions = sce_kegg_description,
+                          pin_name_path = path_to_pin_file)
+
+if (nrow(output_df_gluc) == 0) {
+  output_df_gluc <- "Did not find any enriched terms!"
+}
+```
+
+```{r}
+set.seed(3151)
+output_df_etoh <-run_pathfindR(input = etoh_input,
+                          convert2alias = F,
+                          gene_sets = "Custom",
+                          custom_genes = sce_kegg_genes_alt,
+                          custom_descriptions = sce_kegg_description,
+                          pin_name_path = path_to_pin_file)
+
+if (nrow(output_df_etoh) == 0) {
+  output_df_etoh <- "Did not find any enriched terms!"
+}
+```
+
+```{r}
+pathfind_enrich <- myenrich(output_df)
+```
+
+```{r}
+saveRDS(naive_test, file = "./r_objects/naive_test.rds")
+saveRDS(pvolcrna, file = "./r_objects/pvolcrna.rds")
+```
+
+
+```{r}
+# S table 2.1 - Counts
+wb <- createWorkbook()
+addWorksheet(wb, "Normalised_counts")
+addWorksheet(wb, "Raw_counts")
+writeData(wb, "Normalised_counts",normalized_counts_nice, keepNA = T)
+writeData(wb, "Raw_counts",raw_counts_nice, keepNA = T)
+saveWorkbook(wb, "../out/Tables/S_table_2_1.xlsx")
+```
+
+```{r}
+# S table 2.2 - Diff exp of genes
+wb <- createWorkbook()
+addWorksheet(wb, "Glucose_phase")
+addWorksheet(wb, "Ethanol_phase")
+writeData(wb, "Glucose_phase",gluc_nice, keepNA = T)
+writeData(wb, "Ethanol_phase",etoh_nice, keepNA = T)
+saveWorkbook(wb, "../out/Tables/S_table_2_2.xlsx")
+```
+
+```{r}
+# S table 4.1 - Pathway set prediction (transcriptomics)
+wb <- createWorkbook()
+addWorksheet(wb, "Glucose_phase_transcriptomics")
+addWorksheet(wb, "Ethanol_phase_transcriptomics")
+addWorksheet(wb, "Glucose_phase_metabolomics")
+addWorksheet(wb, "Ethanol_phase_metabolomics")
+
+sigstyle <- createStyle(textDecoration = "Bold")
+
+for (i in 1:length(hypothesis_gluc)) {
+  writeData(wb, "Glucose_phase_transcriptomics", names(hypothesis_gluc)[i], startCol=5*i-4)
+  writeData(wb, "Glucose_phase_transcriptomics", hypothesis_gluc[[i]], startRow = 2, startCol=5*i-4, keepNA = T)
+  if (i<6) {
+   conditionalFormatting(wb, "Glucose_phase_transcriptomics", cols = (1:4)+(5*i-5), rows = 2:82, rule=paste0("$", LETTERS[5*i-1], "2<0.05"), style = sigstyle) 
+  }
+}
+
+for (i in 1:length(hypothesis_etoh)) {
+  writeData(wb, "Ethanol_phase_transcriptomics", names(hypothesis_etoh)[i], startCol=5*i-4)
+  writeData(wb, "Ethanol_phase_transcriptomics", hypothesis_etoh[[i]], startRow = 2, startCol=5*i-4, keepNA = T)
+  if (i<6) {
+   conditionalFormatting(wb, "Ethanol_phase_transcriptomics", cols = (1:4)+(5*i-5), rows = 2:82, rule=paste0("$", LETTERS[5*i-1], "2<0.05"), style = sigstyle) 
+  }
+}
+
+saveWorkbook(wb, "../out/Tables/S_table_4_1.xlsx", overwrite = T)
+```
+
+```{r}
+# S table 5 - Topological enrichment
+wb <- createWorkbook()
+addWorksheet(wb, "Glucose_phase_pathfindR")
+addWorksheet(wb, "Ethanol_phase_pathfindR")
+addWorksheet(wb, "Glucose_phase_FELLA")
+addWorksheet(wb, "Ethanol_phase_FELLA")
+writeData(wb, "Glucose_phase_pathfindR", output_df_gluc, keepNA = T)
+writeData(wb, "Ethanol_phase_pathfindR", output_df_etoh, keepNA = T)
+saveWorkbook(wb, "../out/Tables/S_table_5.xlsx")
+```
+
+```{r}
+ggsave(pathfind_enrich,
+       filename="../out/Figures/Fig_2C.pdf",
+       device = "pdf",
+       height = 7, width =6.5, units = "in")
+```
+

@@ -1,0 +1,4 @@
+"0","assay(base, ""log"") <- log(assay(base))"
+"0","lm_results <- perform_lm(base, assay.type = ""log"", "
+"0","  formula_char = ""Feature ~ Group"")"
+"0","base <- join_rowData(base, lm_results)"

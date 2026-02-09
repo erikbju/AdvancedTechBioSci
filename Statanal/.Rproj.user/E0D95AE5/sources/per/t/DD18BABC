@@ -1,0 +1,28 @@
+{
+    "id": "DD18BABC",
+    "path": null,
+    "project_path": null,
+    "type": "object_explorer",
+    "hash": "0",
+    "contents": "",
+    "dirty": false,
+    "created": 1770643416582.0,
+    "source_on_save": false,
+    "relative_order": 12,
+    "properties": {
+        "id": "08b7aed81d6d4300950fa44e11febbb3",
+        "name": "COMB",
+        "title": "COMB",
+        "language": "R",
+        "source_window_id": "",
+        "Source": "Source"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 0,
+    "encoding": "",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1770643416582,
+    "read_only": false,
+    "read_only_alternatives": []
+}

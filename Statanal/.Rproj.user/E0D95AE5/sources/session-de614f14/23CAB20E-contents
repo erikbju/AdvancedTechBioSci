@@ -1,0 +1,334 @@
+---
+title: "EVE_MS"
+author: "Erik Bjurström"
+date: "2024-08-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(notame)
+library(FELLA)
+library(xml2)
+library(lemon)
+library(cowplot)
+library(readxl)
+library(gridExtra)
+library(svglite)
+library(reshape2)
+
+library(doParallel)
+registerDoParallel(cores=4)
+```
+
+```{r}
+COMB <- read_from_excel(file = "./data/neo_combined_area.xlsx", sheet = 1,
+                        corner_row = 7, corner_column = 5,
+                        split_by = c("Column", "Ion Mode"))
+```
+
+```{r}
+modes <- construct_metabosets(exprs = COMB$exprs, pheno_data = COMB$pheno_data,
+                             feature_data = COMB$feature_data,
+                             group_col = "Group")
+```
+
+```{r}
+processed <- list()
+for (i in seq_along(modes)) {
+  name <- names(modes)[i]
+  mode <- modes[[i]]
+  # Set all zero abundance to NA
+  mode <- mark_nas(mode, value = 0)
+  mode <- flag_detection(mode, qc_limit = 0.7, group_limit = 0.8)
+  corrected <- correct_drift(mode)
+  
+  corrected <- corrected %>% assess_quality() %>% 
+    flag_quality(condition = "(RSD_r < 0.5 & D_ratio_r <0.4) | (RSD < 0.1 & RSD_r < 0.1 & D_ratio <0.1)") %>% drop_flagged()
+  processed[[i]] <- corrected
+}
+
+```
+
+```{r}
+saveRDS(processed, file = "r_objects/processed.rds")
+```
+
+
+```{r}
+processed_no_qc <- list()
+for (i in seq_along(processed)) {
+  dropped_qc <- processed[[i]]
+  processed_no_qc[[i]] <- drop_qcs(dropped_qc)
+  
+}
+```
+
+```{r}
+saveRDS(processed_no_qc, file = "r_objects/processed_no_qc.rds")
+```
+
+```{r}
+set.seed(38)
+imputed_list <- list()
+for (i in seq_along(processed_no_qc)) {
+  imputed_list[[i]] <- impute_rf(processed_no_qc[[i]])
+}
+```
+
+```{r}
+saveRDS(imputed_list, file = "./r_objects/imputed_list.rds")
+```
+
+```{r}
+imputed_list <- readRDS("./r_objects/imputed_list.rds")
+```
+
+```{r}
+merged <- merge_metabosets(imputed_list)
+```
+
+
+```{r}
+grps <- unique(imputed_list[[1]]$Group)
+cmb <- combn(grps,2)
+cmb <- cmb[,substring(cmb[1,],3,3) == substring(cmb[2,],3,3) | substring(cmb[1,],4,6) == substring(cmb[2,],4,6)]
+```
+
+```{r}
+contrasts_RDS50 <- list()
+
+for (i in 1:ncol(cmb)) {
+  contrasts_RDS50[[paste0(cmb[,i], collapse = "_")]] <- imputed_list[[1]]$Group[, imputed_list[[1]]$Group$Group %in% cmb[,i]]
+} 
+```
+
+```{r}
+lm_results <- lapply(contrasts_RDS50, perform_lm, "Feature ~ Group")
+```
+
+```{r}
+saveRDS(lm_results, "./r_objects/lmres.rds")
+```
+
+```{r}
+lm_results <- readRDS("./r_objects/lmres.rds")
+```
+
+```{r}
+AvB <- get_final_list(lm_results$A_Rlog_B_Mlog, COMB)
+AvC <- get_final_list(lm_results$A_Rlog_C_Rpds, COMB)
+BvD <- get_final_list(lm_results$B_Mlog_D_Mpds, COMB)
+CvD <- get_final_list(lm_results$C_Rpds_D_Mpds, COMB)
+```
+
+```{r}
+ALLPO <- read.delim("./data/POS/POS.txt", quote = "")
+colis <- ALLPO[4,]
+colis[56] <- "Avg"
+colis[57] <- "Std"
+colnames(ALLPO) <- colis
+SMALLPOS <- ALLPO[5:nrow(ALLPO),c(1,4,12,13,25,32)]
+```
+
+```{r}
+ALLNE <- read.delim("./data/NEG/NEG.txt", quote = "")
+colnames(ALLNE) <- colis
+SMALLNEG <- ALLNE[5:nrow(ALLNE), c(1,4,12,13,25,32)]
+```
+
+```{r}
+# all_metab <- str_split_fixed(str_split_fixed(rbind(SMALLPOS, SMALLNEG) %>% subset(`Metabolite name`!="Unknown")  %>% pull(`Metabolite name`), ";",2)[,1], ": ",2)[,2] %>% unique()
+
+# Note that NAD and NADP -> NAD+ and NADP+ in this document
+all_metab <- read.csv("./data/db/all_metab_KEGG.csv")
+```
+
+```{r}
+PDS1 <- merge(SMALLPOS, CvD$POS, by.x = "Alignment ID", by.y = "Alignment_ID")
+PDS2 <- merge(SMALLNEG, CvD$NEG, by.x = "Alignment ID", by.y = "Alignment_ID")
+PDS3 <- rbind(PDS1,PDS2)
+```
+
+```{r}
+log1 <- merge(SMALLPOS, AvB$POS, by.x = "Alignment ID", by.y = "Alignment_ID")
+log2 <- merge(SMALLNEG, AvB$NEG, by.x = "Alignment ID", by.y = "Alignment_ID")
+log3 <- rbind(log1,log2)
+```
+
+```{r}
+both <- rbind(log3, PDS3)
+```
+
+```{r}
+metab_names_log <- get_unique_metab_names(log3)
+metab_names_PDS <- get_unique_metab_names(PDS3)
+```
+
+
+```{r}
+yeast9compounds <- read_xlsx("./data/db/yeast-GEM.xlsx", sheet = "METS")
+yeast9keggs <- str_split_fixed(str_split_fixed( yeast9compounds$MIRIAM, ";",5) %>% melt() %>% subset(grepl("kegg.compound", value)) %>% pull(value), "/", 2)[,2] %>% unique()
+```
+
+```{r}
+log_RDS50_final <- merge(all_metab %>% dplyr::select(Query, KEGG), metab_names_log, by.x = "Query", by.y = "Metabolite name") %>% subset(KEGG %in% yeast9keggs)
+PDS_RDS50_final <- merge(all_metab %>% dplyr::select(Query, KEGG), metab_names_PDS, by.x = "Query", by.y = "Metabolite name") %>% subset(KEGG %in% yeast9keggs)
+```
+
+```{r}
+p_list <- list()
+lm_filtered <- list()
+pvolcrna <- readRDS(file = "../2_transcript/out/pvolcrna.rds")
+
+lm_filtered[[1]] <- lm_results[[1]] %>% subset(Feature_ID %in% (both %>% subset(`Metabolite name`!= "Unknown") %>% pull(Feature_ID)))
+lm_filtered[[2]] <- lm_results[[4]] %>% subset(Feature_ID %in% (both %>% subset(`Metabolite name`!= "Unknown") %>% pull(Feature_ID)))
+
+for (i in seq_along(lm_filtered)) {
+  p_list[[i]] <- volcano_MS(lm_filtered[[i]],  qval = F, plim = 0.1)
+}
+leg <- g_legend(p_list[[1]])
+pvolcmetab <-grid.arrange(p_list[[1]] + theme(legend.position = "none"), p_list[[2]] + theme(legend.position =  "none"), nrow = 2)
+fig2b <- plot_grid(pvolcrna, pvolcmetab, leg, ncol = 3, rel_widths = c(1,1,0.2))
+```
+
+
+
+```{r}
+# Supplementary table 4.1 - Prediction metabolites
+pred_metabs <- read_csv(file = "./data/db/predicted_metabs.csv")
+hypothesis_gluc_metab <- list()
+hypothesis_etoh_metab <- list()
+
+for (i in seq(length(ntest))) {
+  if (length(ntest[[i]]$compounds) == 0) {next}
+  tmp <- data.frame(KEGG_ID = ntest[[i]]$compounds)
+  tmp <- merge(tmp, pred_metabs, by = "KEGG_ID")
+  tmp <- tmp %>% mutate(Identified = if_else(KEGG_ID %in% all_metab$KEGG, "YES", "NO")) %>% mutate(QC = if_else(Identified == "NO", NA, if_else(KEGG_ID %in% log_RDS50_final$KEGG, "PASS", "FAIL")))
+  hypothesis_gluc_metab[[names(naive_test)[i]]] <- tmp 
+  hypothesis_gluc_metab[[names(naive_test)[i]]]  <- merge(hypothesis_gluc_metab[[names(naive_test)[i]]] , log_RDS50_final %>% dplyr::select(KEGG, l2fc, p), by.x = "KEGG_ID", by.y = "KEGG", all.x = T) 
+}
+
+for (i in seq(length(ntest))) {
+  if (length(ntest[[i]]$compounds) == 0) {next}
+  tmp <- data.frame(KEGG_ID = ntest[[i]]$compounds)
+  tmp <- merge(tmp, pred_metabs, by = "KEGG_ID")
+  tmp <- tmp %>% mutate(Identified = if_else(KEGG_ID %in% all_metab$KEGG, "YES", "NO")) %>% mutate(QC = if_else(Identified == "NO", NA, if_else(KEGG_ID %in% PDS_RDS50_final$KEGG, "PASS", "FAIL")))
+  hypothesis_etoh_metab[[names(naive_test)[i]]] <- tmp 
+  hypothesis_etoh_metab[[names(naive_test)[i]]]  <- merge(hypothesis_etoh_metab[[names(naive_test)[i]]] , PDS_RDS50_final %>% dplyr::select(KEGG, l2fc, p), by.x = "KEGG_ID", by.y = "KEGG", all.x = T) 
+}
+```
+
+```{r}
+# Fig 2D - FELLA graph
+grapha <- buildGraphFromKEGGREST(organism = "sce")
+tmpdir <- paste0(tempdir(), "/my_database")
+unlink(tmpdir, recursive = TRUE)
+buildDataFromGraph(keggdata.graph = grapha, databaseDir = tmpdir,internalDir = FALSE,matrices = c("diffusion","hypergeom"),normality = c("diffusion"),niter = 100)
+fella.data <- loadKEGGdata(databaseDir = tmpdir,internalDir = FALSE,loadMatrix = "diffusion")
+```
+
+```{r}
+set.seed(20120)
+analysis.ds1 <- defineCompounds(compounds = log_RDS50_final %>% subset(p<0.1) %>% pull(KEGG), data=fella.data)
+analysis.ds1 <- runDiffusion(object = analysis.ds1,data = fella.data,approx = "normality")
+
+nlimit <- 300
+vertex.label.cex <- 1
+fellap <- plot(analysis.ds1,method = "diffusion", data = fella.data, nlimit = nlimit, vertex.label.cex = vertex.label.cex, threshold = 0.05,vertex.size=30)
+tab.all1 <- generateResultsTable(method = "diffusion",nlimit = nlimit,object = analysis.ds1,data = fella.data,threshold = 0.05)
+tab.all1[tab.all1$Entry.type == 'pathway',]
+```
+
+```{r}
+set.seed(20120)
+analysis.ds2 <- defineCompounds(compounds = PDS_RDS50_final %>% subset(p<0.1) %>% pull(KEGG), data=fella.data)
+analysis.ds2 <- runDiffusion(object = analysis.ds2,data = fella.data,approx = "normality")
+
+nlimit <- 300
+vertex.label.cex <- 1
+fellap2 <- plot(analysis.ds2,method = "diffusion", data = fella.data, nlimit = nlimit, vertex.label.cex = vertex.label.cex, threshold = 0.05,vertex.size=30)
+tab.all2 <- generateResultsTable(method = "diffusion",nlimit = nlimit,object = analysis.ds2,data = fella.data,threshold = 0.05)
+tab.all2[tab.all2$Entry.type == 'pathway',]
+```
+
+```{r}
+# S table 3.1 - POS and NEG alignment data
+wb <- createWorkbook()
+addWorksheet(wb, "POS")
+addWorksheet(wb, "NEG")
+writeData(wb, "POS", ALLPO, keepNA = T)
+writeData(wb, "NEG", ALLNE, keepNA = T)
+saveWorkbook(wb, file = "../out/Tables/S_table_3_1.xlsx")
+```
+
+```{r}
+# S table 3.2 - Univariate stat analysis
+wb <- createWorkbook()
+addWorksheet(wb, "Glucose_phase")
+addWorksheet(wb, "Ethanol_phase")
+writeData(wb, "Glucose_phase", log_RDS50_final, keepNA = T)
+writeData(wb, "Ethanol_phase", PDS_RDS50_final, keepNA = T)
+saveWorkbook(wb, file = "../out/Tables/S_table_3_2.xlsx")
+```
+
+```{r}
+# S table 4.1 (metabolomics)
+
+wb <- loadWorkbook(file = "../out/Tables/S_table_4_1.xlsx")
+
+for (i in 1:length(hypothesis_gluc_metab)) {
+  writeData(wb, "Glucose_phase_metabolomics", names(hypothesis_gluc_metab)[i], startCol=7*i-6)
+  writeData(wb, "Glucose_phase_metabolomics", hypothesis_gluc_metab[[i]], startRow = 2, startCol=7*i-6, keepNA = T)
+  if (i<4) {
+   conditionalFormatting(wb, "Glucose_phase_metabolomics", cols = (1:6)+(7*i-7), rows = 2:70, rule=paste0("$", LETTERS[7*i-1], "2<0.05"), style = sigstyle)
+  }
+}
+
+for (i in 1:length(hypothesis_etoh_metab)) {
+  writeData(wb, "Ethanol_phase_metabolomics", names(hypothesis_etoh_metab)[i], startCol=7*i-6)
+  writeData(wb, "Ethanol_phase_metabolomics", hypothesis_etoh_metab[[i]], startRow = 2, startCol=7*i-6, keepNA = T)
+  if (i<4) {
+   conditionalFormatting(wb, "Ethanol_phase_metabolomics", cols = (1:6)+(7*i-7), rows = 2:70, rule=paste0("$", LETTERS[7*i-1], "2<0.05"), style = sigstyle)
+  }
+}
+
+saveWorkbook(wb, "../out/Tables/S_table_4_1.xlsx", overwrite = T)
+```
+
+```{r}
+# S table 5 - Topological enrichment
+wb <- loadWorkbook(file = "../out/Tables/S_table_5.xlsx")
+writeData(wb, "Glucose_phase_FELLA",tab.all1, keepNA = T)
+writeData(wb, "Ethanol_phase_FELLA",tab.all2, keepNA = T)
+saveWorkbook(wb, "../out/Tables/S_table_5.xlsx", overwrite = T)
+```
+
+```{r}
+ggsave(fig2b,
+       filename="../out/Figures/Fig_2B.pdf",
+       device = "pdf",
+       height = 5, width =11.5, units = "in")
+```
+
+```{r}
+set.seed(20120)
+pdf(file = "../out/Figures/Fig_2D.pdf")
+plot(analysis.ds2,method = "diffusion", data = fella.data, nlimit = nlimit, vertex.label.cex = vertex.label.cex, threshold = 0.05,vertex.size=30)
+dev.off()
+```
+
+
+```{r}
+MAF_POS <- get_MAFS(ALLPO[-(1:4), ], all_metab)
+MAF_NEG <- get_MAFS(ALLNE[-(1:4), ], all_metab)
+```
+
+```{r}
+write.table(MAF_POS, file = "./out/m_REQ20250616211240_LC-MS_positive_reverse-phase_metabolite_profiling_v2_maf.tsv", sep = "\t", row.names = F)
+write.table(MAF_NEG, file = "./out/m_REQ20250616211240_LC-MS_negative_reverse-phase_metabolite_profiling_v2_maf.tsv", sep = "\t", row.names = F)
+```

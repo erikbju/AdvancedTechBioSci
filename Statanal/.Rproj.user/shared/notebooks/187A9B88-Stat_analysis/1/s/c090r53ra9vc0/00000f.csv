@@ -1,0 +1,1 @@
+"0","keggtrans <- read.table(file = ""./name2kegg.txt"", header = T, sep = ""\t"", quote ="""")"
